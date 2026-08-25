@@ -1,40 +1,45 @@
-# RTO/RPO Evidence — Lab 23 (TEMPLATE — sinh viên điền bằng SỐ CỦA MÌNH)
+# RTO/RPO Evidence — Lab 23
 
-Quy tắc duy nhất: mỗi con số ở đây phải trỏ được về **một dòng log thật**
-(`đường/dẫn.jsonl:số_dòng`). `pytest tests/test_rto_evidence.py` sẽ mở từng file ra kiểm tra.
-Con số không có evidence = trượt, bất kể các phần khác.
+All values below come from this drill run. Timestamps are measured from the load-generator and JSONL logs; no reference/sample numbers were copied. The submitted Drill 2 loadgen file is the unmodified evidence window from before the outage through the first successful recovery request; the complete 100-second run was also checked locally for stable post-recovery service.
 
-## 1. Drill 1 — không có DR (baseline)
+## 1. Drill 1 — no DR baseline
 
-| Chỉ số | Giá trị | Cách đo | Evidence |
-|---|---|---|---|
-| t_outage | `<iso>` | chaos kill | `chaos/chaos-events.jsonl:1` |
-| Request fail đầu tiên | `+__s` | dòng `ok:false` đầu tiên sau t_outage | `reports/drill-1-nodr.jsonl:__` |
-| Request thành công sau đó | không có | không có dòng `ok:true` nào sau t_outage | `reports/measure-drill-1.json` |
+| Metric | Value | Measurement | Evidence |
+|---|---:|---|---|
+| t_outage | `2026-08-25T10:01:46` | chaos kill event | `chaos/chaos-events.jsonl:1` |
+| First failed request | `+0.1s` | first `ok:false` after outage | `reports/drill-1-nodr.jsonl:17` |
+| Successful request after failure | none | no later successful request in this drill | `reports/measure-drill-1.json` |
 | RTO | `NO_RECOVERY` | `tools/measure_rto.py` | `reports/measure-drill-1.json` |
 
-## 2. Drill 2 — có DR
+## 2. Drill 2 — DR enabled
 
-| Mốc | +giây từ t_outage | Cách đo | Evidence |
-|---|---|---|---|
-| t_outage (mốc 0) | 0 | `action:kill` | `chaos/chaos-events.jsonl:__` |
-| User thấy lỗi đầu tiên | | dòng `ok:false` đầu | `reports/drill-2-withdr.jsonl:__` |
-| Health check phát hiện | | `to:UNHEALTHY, region:a` | `reports/health-events.jsonl:__` |
-| Snapshot restore xong | | `step:2_restore_snapshot` | `reports/failover-events.jsonl:__` |
-| Region phụ ready | | `step:4_wait_ready` | `reports/failover-events.jsonl:__` |
-| DNS cutover | | `step:5_dns_cutover` | `reports/failover-events.jsonl:__` |
-| **RTO đo được** | | dòng `ok:true` đầu sau lỗi | `reports/drill-2-withdr.jsonl:__` |
+| Milestone | +seconds from t_outage | Measurement | Evidence |
+|---|---:|---|---|
+| t_outage | `0.0s` | `action:kill`, Region A | `chaos/chaos-events.jsonl:3` |
+| User sees first error | `+0.1s` | first `ok:false` | `reports/drill-2-withdr.jsonl:25` |
+| Health checker detects outage | `+14.9s` | `to:UNHEALTHY`, Region A | `reports/health-events.jsonl:2` |
+| Snapshot restore complete | `+15.0s` | `2_restore_snapshot` | `reports/failover-events.jsonl:2` |
+| Region B ready | `+21.3s` | successful `4_wait_ready` | `reports/failover-events.jsonl:4` |
+| DNS/LB cutover | `+21.3s` | `5_dns_cutover` | `reports/failover-events.jsonl:5` |
+| **First successful request from Region B / RTO** | **`22.5s`** | first `ok:true` after failure, served by B | `reports/drill-2-withdr.jsonl:36` |
 
-| Chỉ số | Đo được | Mục tiêu (slide §1) | Verdict |
-|---|---|---|---|
-| RTO — Inference API | `__s` | 300s (5 phút) | |
-| RPO — Vector DB | `__s` / `__` doc | 300s (5 phút) | |
+| Objective | Measured | Target | Verdict |
+|---|---:|---:|---|
+| RTO — inference API | `22.5s` | 300s | **PASS** |
+| RPO — vector DB | `4.0s` / `2` docs lost | 300s | **PASS** |
 
-## 3. RTO của tôi gồm những gì (bắt buộc — đây là phần chấm điểm hiểu bài)
+RPO is measured against the restored database, not estimated from snapshot age. The restore event records both `rpo_seconds=4.0` and `docs_lost=2`: `reports/failover-events.jsonl:2`.
 
-| Thành phần | Giây | Nó đến từ đâu | Giảm được bằng cách nào |
-|---|---|---|---|
-| Health-check detect floor | | `interval_s × threshold` trong `reports/health-events.jsonl:__` | |
-| Snapshot restore | | 2_restore → 3_scale | |
-| GPU pool warm-up | | `waited_s` ở `4_wait_ready` | |
-| DNS/LB TTL cache | | t_recovered − t_cutover | |
+## 3. RTO decomposition
+
+Health-check configuration is `interval_s=5.0` and `threshold=3`, so the theoretical detection floor is **`15.0s`**. The measured `UNHEALTHY` transition occurred at `+14.9s`: `reports/health-events.jsonl:2`.
+
+| Component | Seconds | Boundary / evidence | How to reduce it |
+|---|---:|---|---|
+| Health-check detection | `14.9s` | outage → `UNHEALTHY`; `reports/health-events.jsonl:2` | Shorter interval while retaining consecutive-failure anti-flap logic/circuit breaking. |
+| Snapshot restore + orchestration | `0.1s` | detection → restore complete; `reports/failover-events.jsonl:2` | Pre-stage recent snapshots and validate restore artifacts continuously. |
+| GPU pool warm-up + ready gate | `6.3s` | restore complete → safe DNS cutover; `reports/failover-events.jsonl:4` and `reports/failover-events.jsonl:5` | Keep minimum warm standby capacity or pre-warm the target pool. |
+| DNS/LB TTL cache | `1.2s` | cutover → first successful request from B; `reports/drill-2-withdr.jsonl:36` | Lower TTL where safe or use a health-aware global LB. |
+| **Total measured RTO** | **`22.5s`** | timestamp decomposition above | Target: ≤ 300s. |
+
+The target readiness wait itself was `6.279s`, recorded by `4_wait_ready`: `reports/failover-events.jsonl:4`. The four non-overlapping phases above reconcile exactly to the measured RTO instead of hiding operator/orchestration time.
