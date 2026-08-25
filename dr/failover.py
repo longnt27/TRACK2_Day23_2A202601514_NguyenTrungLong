@@ -35,13 +35,95 @@ LOG = pathlib.Path("reports/failover-events.jsonl")
 
 
 def emit(**kw):
-    """TODO: append 1 dòng JSONL có ts + iso vào LOG, và print ra stdout."""
-    raise NotImplementedError
+    """Append one timestamped event and return it to the caller."""
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "ts": time.time(),
+        "iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+        **kw,
+    }
+    with LOG.open("a") as log:
+        log.write(json.dumps(record, ensure_ascii=False) + "\n")
+    print(json.dumps(record, ensure_ascii=False), flush=True)
+    return record
+
+
+def state_of(region: str) -> dict:
+    response = httpx.get(f"{URL[region]}/v1/state", timeout=2.0)
+    response.raise_for_status()
+    return response.json()
 
 
 def failover(target: str, backend: str, wait: float) -> dict:
-    """TODO: 5 bước ở trên, đúng thứ tự."""
-    raise NotImplementedError
+    """Restore, warm, verify, then cut traffic over to ``target``."""
+    if target not in URL:
+        raise ValueError(f"unknown target region: {target}")
+    if wait < 0:
+        raise ValueError("wait must be non-negative")
+
+    try:
+        before = state_of(target)
+    except Exception as exc:
+        before = {"region": target, "error": type(exc).__name__}
+    emit(step="1_verify_target", target=target, state=before)
+
+    try:
+        restored = snapshot.get(target, backend)
+        source = restored.get("source_region") or ("b" if target == "a" else "a")
+        rpo = snapshot.rpo(
+            pathlib.Path(f"state/region-{source}/vectors.sqlite"),
+            pathlib.Path(f"state/region-{target}/vectors.sqlite"),
+        )
+        emit(step="2_restore_snapshot", target=target,
+             rpo_seconds=rpo["rpo_seconds"], docs_lost=rpo["docs_lost"],
+             embed_model_version=restored.get("embed_model_version"),
+             snapshot_at=restored.get("snapshot_at"), restored_at=restored.get("restored_at"))
+    except (Exception, SystemExit) as exc:
+        # snapshot.get deliberately raises SystemExit for a missing snapshot; a runbook
+        # should report that failure instead of terminating before it can log evidence.
+        emit(step="2_restore_snapshot", target=target, ok=False,
+             error=f"{type(exc).__name__}: {exc}")
+        return {"ok": False, "target": target, "failed_step": "2_restore_snapshot",
+                "error": str(exc)}
+
+    pool_file = pathlib.Path(f"state/region-{target}/pool_state")
+    pool_file.parent.mkdir(parents=True, exist_ok=True)
+    pool_file.write_text("full\n")
+    emit(step="3_scale_pool", target=target, pool_state="full")
+
+    started = time.monotonic()
+    deadline = started + wait
+    ready_state = None
+    last_error = None
+    while True:
+        try:
+            response = httpx.get(f"{URL[target]}/readyz", timeout=min(2.0, max(0.1, wait)))
+            ready_state = response.json()
+            if response.status_code == 200:
+                waited = round(time.monotonic() - started, 2)
+                emit(step="4_wait_ready", target=target, ok=True, waited_s=waited,
+                     state=ready_state)
+                break
+            last_error = ",".join(ready_state.get("reasons", []))
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        if time.monotonic() >= deadline:
+            waited = round(time.monotonic() - started, 2)
+            emit(step="4_wait_ready", target=target, ok=False, waited_s=waited,
+                 error=last_error)
+            return {"ok": False, "target": target, "failed_step": "4_wait_ready",
+                    "waited_s": waited, "error": last_error}
+        time.sleep(min(0.5, max(0.0, deadline - time.monotonic())))
+
+    active = pathlib.Path("edge/active_region")
+    active.parent.mkdir(parents=True, exist_ok=True)
+    active.write_text(target + "\n")
+    emit(step="5_dns_cutover", target=target, ok=True, active_region=target)
+    final_state = state_of(target)
+    return {"ok": True, "target": target, "state": final_state,
+            "rpo_seconds": rpo["rpo_seconds"], "docs_lost": rpo["docs_lost"],
+            "embed_model_version": restored.get("embed_model_version"),
+            "waited_s": waited, "active_region": target}
 
 
 if __name__ == "__main__":

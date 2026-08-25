@@ -1,0 +1,13 @@
+{"ts": 1787652449.7303329, "iso": "2026-08-25T10:07:29", "step": "1_verify_target", "target": "b", "state": {"region": "b", "pool_state": "warm", "weights": false, "count": 0, "latest_doc_ts": null, "ts": 1787652449.729749}}
+{"ts": 1787652449.733105, "iso": "2026-08-25T10:07:29", "step": "2_restore_snapshot", "target": "b", "rpo_seconds": 4.01, "docs_lost": 2, "embed_model_version": "embed-model=vi-e5-base@v3", "snapshot_at": 1787652447.505895, "restored_at": 1787652449.732094}
+{"ts": 1787652449.7333891, "iso": "2026-08-25T10:07:29", "step": "3_scale_pool", "target": "b", "pool_state": "full"}
+{"ts": 1787652455.916341, "iso": "2026-08-25T10:07:35", "step": "4_wait_ready", "target": "b", "ok": true, "waited_s": 6.18, "state": {"region": "b", "ready": true, "reasons": [], "pool_state": "full", "vectors": {"count": 215, "latest_doc_ts": 1787652445.585671}, "ts": 1787652455.915375}}
+{"ts": 1787652455.917001, "iso": "2026-08-25T10:07:35", "step": "5_dns_cutover", "target": "b", "ok": true, "active_region": "b"}
+{"ts": 1787652617.733505, "iso": "2026-08-25T10:10:17", "step": "1_verify_target", "target": "b", "state": {"region": "b", "pool_state": "warm"}}
+{"ts": 1787652617.735158, "iso": "2026-08-25T10:10:17", "step": "2_restore_snapshot", "target": "b", "rpo_seconds": 120.5, "docs_lost": 60, "embed_model_version": "test", "snapshot_at": 1787652617.733783, "restored_at": null}
+{"ts": 1787652617.73538, "iso": "2026-08-25T10:10:17", "step": "3_scale_pool", "target": "b", "pool_state": "full"}
+{"ts": 1787652618.745593, "iso": "2026-08-25T10:10:18", "step": "4_wait_ready", "target": "b", "ok": false, "waited_s": 1.01, "error": "ConnectError: mocked: target khong bao gio ready"}
+{"ts": 1787652654.712662, "iso": "2026-08-25T10:10:54", "step": "1_verify_target", "target": "b", "state": {"region": "b", "pool_state": "warm"}}
+{"ts": 1787652654.713517, "iso": "2026-08-25T10:10:54", "step": "2_restore_snapshot", "target": "b", "rpo_seconds": 120.5, "docs_lost": 60, "embed_model_version": "test", "snapshot_at": 1787652654.712877, "restored_at": null}
+{"ts": 1787652654.713794, "iso": "2026-08-25T10:10:54", "step": "3_scale_pool", "target": "b", "pool_state": "full"}
+{"ts": 1787652655.724104, "iso": "2026-08-25T10:10:55", "step": "4_wait_ready", "target": "b", "ok": false, "waited_s": 1.01, "error": "ConnectError: mocked: target khong bao gio ready"}

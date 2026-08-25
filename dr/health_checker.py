@@ -29,13 +29,68 @@ URL = {"a": "http://127.0.0.1:8001", "b": "http://127.0.0.1:8002"}
 
 
 def probe(region: str, timeout: float) -> tuple[bool, str]:
-    """TODO: trả về (ready, reason). Timeout PHẢI có — netblock làm request treo mãi."""
-    raise NotImplementedError
+    """Return readiness and a compact, log-friendly failure reason."""
+    try:
+        response = httpx.get(f"{URL[region]}/readyz", timeout=timeout)
+        if response.status_code == 200:
+            return True, "ready"
+        try:
+            reasons = response.json().get("reasons", [])
+            detail = ",".join(str(reason) for reason in reasons)
+        except (ValueError, AttributeError):
+            detail = response.text[:200]
+        return False, detail or f"http_{response.status_code}"
+    except httpx.TimeoutException:
+        return False, "timeout"
+    except httpx.HTTPError as exc:
+        return False, type(exc).__name__
 
 
 def run(interval: float, timeout: float, threshold: int, duration: float, out: pathlib.Path):
-    """TODO: vòng lặp poll + phát hiện transition + ghi JSONL."""
-    raise NotImplementedError
+    """Poll both regions and record only debounced state transitions."""
+    if interval <= 0 or timeout <= 0 or duration < 0:
+        raise ValueError("interval/timeout must be positive and duration non-negative")
+    if threshold < 1:
+        raise ValueError("threshold must be at least 1")
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    state = {region: "HEALTHY" for region in URL}
+    consecutive_fails = {region: 0 for region in URL}
+    deadline = time.monotonic() + duration
+    next_poll = time.monotonic()
+
+    with out.open("a") as log:
+        while time.monotonic() < deadline:
+            for region in URL:
+                ready, reason = probe(region, timeout)
+                consecutive_fails[region] = 0 if ready else consecutive_fails[region] + 1
+                desired = "HEALTHY" if ready else (
+                    "UNHEALTHY" if consecutive_fails[region] >= threshold else state[region]
+                )
+                if desired != state[region]:
+                    record = {
+                        "ts": time.time(),
+                        "iso": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()),
+                        "event": "state_change",
+                        "region": region,
+                        "from": state[region],
+                        "to": desired,
+                        "reason": reason,
+                        "consecutive_fails": consecutive_fails[region],
+                        "interval_s": interval,
+                        "threshold": threshold,
+                    }
+                    log.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    log.flush()
+                    print(json.dumps(record, ensure_ascii=False), flush=True)
+                    state[region] = desired
+
+            next_poll += interval
+            remaining = min(deadline, next_poll) - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+
+    return state
 
 
 if __name__ == "__main__":
